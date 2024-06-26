@@ -6,6 +6,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 // Import interfaces for many popular DeFi projects, or add your own!
 //import "../interfaces/<protocol>/<Interface>.sol";
+import "./interfaces/aave/IGhoToken.sol";
+import "./interfaces/curve/ICurvePool.sol";
+import "./interfaces/convex/IConvex.sol";
 
 /**
  * The `TokenizedStrategy` variable can be used to retrieve the strategies
@@ -23,10 +26,19 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 contract Strategy is BaseStrategy {
     using SafeERC20 for ERC20;
 
+    IGhoToken public constant GHO = IGhoToken(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
+    ICurvePool public constant POOL = ICurvePool(0x635EF0056A597D13863B73825CcA297236578595);
+    IConvex public constant CONVEX = IConvex(0xF403C135812408BFbE8713b5A23a04b3D48AAE31);
+
+    uint256 public constant PID = 335; // convex pool id
+
     constructor(
         address _asset,
         string memory _name
-    ) BaseStrategy(_asset, _name) {}
+    ) BaseStrategy(_asset, _name) {
+        GHO.approve(address(POOL), type(uint256).max);
+        POOL.approve(address(CONVEX), type(uint256).max);
+    }
 
     /*//////////////////////////////////////////////////////////////
                 NEEDED TO BE OVERRIDDEN BY STRATEGIST
@@ -44,9 +56,17 @@ contract Strategy is BaseStrategy {
      * to deposit in the yield source.
      */
     function _deployFunds(uint256 _amount) internal override {
-        // TODO: implement deposit logic EX:
-        //
-        //      lendingPool.deposit(address(asset), _amount ,0);
+        // Deposit GHO into crvUSD/GHO pool.
+        uint256[] memory _amounts = new uint256[](2);
+        _amounts[0] = _amount;
+
+        uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
+        uint256 _minAmountOut = (_expectedLpAmount * 99) / 100;
+
+        uint256 _lpAmount = POOL.add_liquidity(_amounts, _minAmountOut);
+
+        // Deposit crvUSDGHO LP into convex and stake.
+        CONVEX.deposit(PID, _lpAmount, true);
     }
 
     /**
