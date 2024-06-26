@@ -4,11 +4,12 @@ pragma solidity 0.8.18;
 import {BaseStrategy, ERC20} from "@tokenized-strategy/BaseStrategy.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-// Import interfaces for many popular DeFi projects, or add your own!
-//import "../interfaces/<protocol>/<Interface>.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
+
 import "./interfaces/aave/IGhoToken.sol";
 import "./interfaces/curve/ICurvePool.sol";
 import "./interfaces/convex/IConvex.sol";
+import "./interfaces/convex/IConvexRewards.sol";
 
 /**
  * The `TokenizedStrategy` variable can be used to retrieve the strategies
@@ -23,14 +24,20 @@ import "./interfaces/convex/IConvex.sol";
 
 // NOTE: To implement permissioned functions you can use the onlyManagement, onlyEmergencyAuthorized and onlyKeepers modifiers
 
+// Custom errors
+error ZeroLP();
+
 contract Strategy is BaseStrategy {
     using SafeERC20 for ERC20;
 
     IGhoToken public constant GHO = IGhoToken(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
     ICurvePool public constant POOL = ICurvePool(0x635EF0056A597D13863B73825CcA297236578595);
     IConvex public constant CONVEX = IConvex(0xF403C135812408BFbE8713b5A23a04b3D48AAE31);
+    IConvexRewards public constant CONVEX_REWARDS = IConvexRewards(0x5eC758f79b96AE74e7F1Ba9583009aFB3fc8eACB);
 
     uint256 public constant PID = 335; // convex pool id
+
+    uint256 public constant SLIPPAGE = 9_900; // slippage in BPS // slippage in BPS
 
     constructor(
         address _asset,
@@ -91,9 +98,29 @@ contract Strategy is BaseStrategy {
      * @param _amount, The amount of 'asset' to be freed.
      */
     function _freeFunds(uint256 _amount) internal override {
-        // TODO: implement withdraw logic EX:
-        //
-        //      lendingPool.withdraw(address(asset), _amount);
+        // Unstake crvUSDGHO LP.
+        uint256[] memory _amounts = new uint256[](2);
+        _amounts[0] = _amount;
+        uint256 _desired_lp_amount = POOL.calc_token_amount(
+            _amounts,
+            false
+        );
+
+        uint256 _staked_tokens = CONVEX_REWARDS.balanceOf(address(this));
+
+        uint256 _lp_amount = Math.min(_desired_lp_amount, _staked_tokens);
+
+        if (_lp_amount == 0) revert ZeroLP();
+        CONVEX_REWARDS.withdrawAndUnwrap(_lp_amount, false);
+
+        uint256 _minAmountOut = Math.mulDiv(_amount, SLIPPAGE, 10_000);
+
+        // Withdraw GHO
+        POOL.remove_liquidity_one_coin(
+            _lp_amount,
+            int128(0),
+            _minAmountOut
+        );
     }
 
     /**
@@ -167,7 +194,9 @@ contract Strategy is BaseStrategy {
         // if(yieldSource.notShutdown()) {
         //    return asset.balanceOf(address(this)) + asset.balanceOf(yieldSource);
         // }
-        return asset.balanceOf(address(this));
+        // TODO: perhaps calculate amount via
+        // preview withdraw and return that
+        return type(uint256).max;
     }
 
     /**
