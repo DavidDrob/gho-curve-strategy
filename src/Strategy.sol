@@ -42,7 +42,8 @@ contract Strategy is BaseStrategy {
 
     uint256 public constant PID = 335; // convex pool id
 
-    uint256 public constant SLIPPAGE = 9_900; // slippage in BPS // slippage in BPS
+    uint256 public constant SLIPPAGE = 9_900; // slippage in BPS
+    uint256 public constant MAX_BPS = 10_000;
 
     constructor(
         address _asset,
@@ -75,7 +76,7 @@ contract Strategy is BaseStrategy {
         _amounts[0] = _amount;
 
         uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
-        uint256 _minAmountOut = (_expectedLpAmount * 99) / 100;
+        uint256 _minAmountOut = Math.mulDiv(_expectedLpAmount, SLIPPAGE, MAX_BPS);
 
         uint256 _lpAmount = POOL.add_liquidity(_amounts, _minAmountOut);
 
@@ -162,16 +163,18 @@ contract Strategy is BaseStrategy {
             bool _claimedSucessfully = CONVEX_REWARDS.getReward();
             if (!_claimedSucessfully) revert NoCRVMinted();
             
-            uint256 dx = CRV.balanceOf(address(this));
+            uint256 _dx = CRV.balanceOf(address(this));
 
-            uint256 min_dy = (REWARDS_POOL.get_dy(2, 0, dx) * 99) / 100; // TODO: SAFEMATH
-            uint256 _amount = REWARDS_POOL.exchange(2, 0, dx, min_dy);
+            uint256 _expected_dy = REWARDS_POOL.get_dy(2, 0, _dx);
+            uint256 min_dy = Math.mulDiv(_expected_dy, SLIPPAGE, MAX_BPS);
+
+            uint256 _amount = REWARDS_POOL.exchange(2, 0, _dx, min_dy);
 
             uint256[] memory _amounts = new uint256[](2);
             _amounts[1] = _amount;
 
             uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
-            uint256 _minAmountOut = (_expectedLpAmount * 99) / 100; // TODO: SAFEMATH
+            uint256 _minAmountOut = Math.mulDiv(_expectedLpAmount, SLIPPAGE, MAX_BPS);
 
             uint256 _lpAmount = POOL.add_liquidity(_amounts, _minAmountOut);
 
