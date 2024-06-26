@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 import "./interfaces/aave/IGhoToken.sol";
 import "./interfaces/curve/ICurvePool.sol";
 import "./interfaces/curve/ITriCryptoNG.sol";
+import "./interfaces/curve/ICryptoSwap.sol";
 import "./interfaces/convex/IConvex.sol";
 import "./interfaces/convex/IConvexRewards.sol";
 
@@ -28,6 +29,7 @@ import "./interfaces/convex/IConvexRewards.sol";
 // Custom errors
 error ZeroLP();
 error NoCRVMinted();
+error NotEnoughCVX();
 
 contract Strategy is BaseStrategy {
     using SafeERC20 for ERC20;
@@ -35,15 +37,19 @@ contract Strategy is BaseStrategy {
     IGhoToken public constant GHO = IGhoToken(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
     IERC20 public constant CRV_USD = IERC20(0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E);
     IERC20 public constant CRV = IERC20(0xD533a949740bb3306d119CC777fa900bA034cd52);
+    IERC20 public constant CVX = IERC20(0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B);
     ICurvePool public constant POOL = ICurvePool(0x635EF0056A597D13863B73825CcA297236578595);
     IConvex public constant CONVEX = IConvex(0xF403C135812408BFbE8713b5A23a04b3D48AAE31);
     IConvexRewards public constant CONVEX_REWARDS = IConvexRewards(0x5eC758f79b96AE74e7F1Ba9583009aFB3fc8eACB);
+    ICryptoSwap public constant CVX_ETH_POOL = ICryptoSwap(0xB576491F1E6e5E62f1d8F26062Ee822B40B0E0d4);
     ITriCryptoNG public constant REWARDS_POOL = ITriCryptoNG(0x4eBdF703948ddCEA3B11f675B4D1Fba9d2414A14);
 
     uint256 public constant PID = 335; // convex pool id
 
     uint256 public constant SLIPPAGE = 9_900; // slippage in BPS
     uint256 public constant MAX_BPS = 10_000;
+
+    uint256 public constant MIN_CVX_TO_HARVEST = 30e18;
 
     constructor(
         address _asset,
@@ -288,8 +294,29 @@ contract Strategy is BaseStrategy {
      *
      * @param _totalIdle The current amount of idle funds that are available to deploy.
      *
-    function _tend(uint256 _totalIdle) internal override {}
     */
+    // swaps CVX rewards for CRV via WETH
+    // call this before report to compound more rewards
+    // TODO: approve pools & test
+    function _tend(uint256 _totalIdle) internal override {
+        if (!_tendTrigger()) revert NotEnoughCVX();
+
+	    uint256 _cvxBalance = CVX.balanceOf(address(this));
+
+        // calculate slippage for CVX -> WETH  
+        uint256 _expectedEth = CVX_ETH_POOL.get_dy(1, 0, _cvxBalance);
+        uint256 _minEth = Math.mulDiv(_expectedEth , SLIPPAGE, MAX_BPS);
+
+        // swap CVX -> WETH
+        uint256 _ethAmount = CVX_ETH_POOL.exchange(1, 0, _cvxBalance, _minEth);
+
+        // calculate slippage for WETH -> CRV
+        uint256 _expectedCrv = REWARDS_POOL.get_dy(1, 2, _ethAmount);
+        uint256 _minCrv = Math.mulDiv(_expectedCrv , SLIPPAGE, MAX_BPS);
+
+        // swap WETH -> CRV
+        REWARDS_POOL.exchange(1, 2, _ethAmount, _minCrv);
+    }
 
     /**
      * @dev Optional trigger to override if tend() will be used by the strategy.
@@ -297,8 +324,18 @@ contract Strategy is BaseStrategy {
      *
      * @return . Should return true if tend() should be called by keeper or false if not.
      *
-    function _tendTrigger() internal view override returns (bool) {}
     */
+    function _tendTrigger() internal view override returns (bool) {
+	    uint256 _cvxBalance = CVX.balanceOf(address(this));
+
+        if (_cvxBalance == 0) return false;
+	
+        // CVX -> CRV via WETH
+        uint256 _ethAmount = CVX_ETH_POOL.get_dy(1, 0, _cvxBalance);
+        uint256 _crvOut = REWARDS_POOL.get_dy(1, 2, _ethAmount);
+
+        return _crvOut > MIN_CVX_TO_HARVEST;
+    }
 
     /**
      * @dev Optional function for a strategist to override that will
