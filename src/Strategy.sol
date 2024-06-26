@@ -8,6 +8,7 @@ import "@openzeppelin/contracts/utils/math/Math.sol";
 
 import "./interfaces/aave/IGhoToken.sol";
 import "./interfaces/curve/ICurvePool.sol";
+import "./interfaces/curve/ITriCryptoNG.sol";
 import "./interfaces/convex/IConvex.sol";
 import "./interfaces/convex/IConvexRewards.sol";
 
@@ -26,14 +27,18 @@ import "./interfaces/convex/IConvexRewards.sol";
 
 // Custom errors
 error ZeroLP();
+error NoCRVMinted();
 
 contract Strategy is BaseStrategy {
     using SafeERC20 for ERC20;
 
     IGhoToken public constant GHO = IGhoToken(0x40D16FC0246aD3160Ccc09B8D0D3A2cD28aE6C2f);
+    IERC20 public constant CRV_USD = IERC20(0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E);
+    IERC20 public constant CRV = IERC20(0xD533a949740bb3306d119CC777fa900bA034cd52);
     ICurvePool public constant POOL = ICurvePool(0x635EF0056A597D13863B73825CcA297236578595);
     IConvex public constant CONVEX = IConvex(0xF403C135812408BFbE8713b5A23a04b3D48AAE31);
     IConvexRewards public constant CONVEX_REWARDS = IConvexRewards(0x5eC758f79b96AE74e7F1Ba9583009aFB3fc8eACB);
+    ITriCryptoNG public constant REWARDS_POOL = ITriCryptoNG(0x4eBdF703948ddCEA3B11f675B4D1Fba9d2414A14);
 
     uint256 public constant PID = 335; // convex pool id
 
@@ -44,7 +49,9 @@ contract Strategy is BaseStrategy {
         string memory _name
     ) BaseStrategy(_asset, _name) {
         GHO.approve(address(POOL), type(uint256).max);
+        CRV_USD.approve(address(POOL), type(uint256).max);
         POOL.approve(address(CONVEX), type(uint256).max);
+        CRV.approve(address(REWARDS_POOL), type(uint256).max);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -150,14 +157,40 @@ contract Strategy is BaseStrategy {
         override
         returns (uint256 _totalAssets)
     {
-        // TODO: Implement harvesting logic and accurate accounting EX:
-        //
-        //      if(!TokenizedStrategy.isShutdown()) {
-        //          _claimAndSellRewards();
-        //      }
-        //      _totalAssets = aToken.balanceOf(address(this)) + asset.balanceOf(address(this));
-        //
-        _totalAssets = asset.balanceOf(address(this));
+        if (!TokenizedStrategy.isShutdown()) {
+            // Claim CRV rewards
+            bool _claimedSucessfully = CONVEX_REWARDS.getReward();
+            if (!_claimedSucessfully) revert NoCRVMinted();
+            
+            uint256 dx = CRV.balanceOf(address(this));
+
+            uint256 min_dy = (REWARDS_POOL.get_dy(2, 0, dx) * 99) / 100; // TODO: SAFEMATH
+            uint256 _amount = REWARDS_POOL.exchange(2, 0, dx, min_dy);
+
+            uint256[] memory _amounts = new uint256[](2);
+            _amounts[1] = _amount;
+
+            uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
+            uint256 _minAmountOut = (_expectedLpAmount * 99) / 100; // TODO: SAFEMATH
+
+            uint256 _lpAmount = POOL.add_liquidity(_amounts, _minAmountOut);
+
+            // Deposit crvUSDGHO LP into convex and stake.
+            CONVEX.deposit(PID, _lpAmount, true);
+        }
+
+        uint256 _convexLPBalance = CONVEX_REWARDS.balanceOf(address(this));
+        uint256 _ghoBalance = GHO.balanceOf(address(this));
+
+        // `calc_withdraw_one_coin` reverts when `_burn_amount` is zero
+        if (_convexLPBalance == 0) {
+            _totalAssets = _ghoBalance;
+        }
+        else {
+            _totalAssets = 
+                POOL.calc_withdraw_one_coin(_convexLPBalance, int128(0)) + 
+                _ghoBalance;
+        }
     }
 
     /*//////////////////////////////////////////////////////////////
