@@ -3,6 +3,7 @@ pragma solidity ^0.8.18;
 
 import "forge-std/console.sol";
 import {Setup, ERC20, IStrategyInterface} from "./utils/Setup.sol";
+import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
 
 contract OperationTest is Setup {
     function setUp() public virtual override {
@@ -230,5 +231,58 @@ contract OperationTest is Setup {
 
         (trigger, ) = strategy.tendTrigger();
         assertTrue(!trigger);
+    }
+
+    function test_tendCVX(uint256 _amount) public {
+        vm.assume(_amount > minFuzzAmount && _amount < maxFuzzAmount);
+
+        (bool trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
+
+        // Deposit into strategy
+        mintAndDepositIntoStrategy(strategy, user, _amount);
+
+        (trigger, ) = strategy.tendTrigger();
+        assertTrue(!trigger);
+
+        // Skip some time
+        skip(strategy.profitMaxUnlockTime());
+
+        uint256 cvxBefore = IERC20(tokenAddrs['CVX']).balanceOf(address(strategy));
+
+        vm.prank(keeper);
+        strategy.report();
+
+        // Check if Strategy received any CVX
+        uint256 cvxReceived = IERC20(tokenAddrs['CVX']).balanceOf(address(strategy)) - cvxBefore;
+
+        assertGt(cvxReceived, 0, "No CVX received");
+
+        airdrop(ERC20(tokenAddrs['CVX']), address(strategy), 30e18);
+
+        (trigger, ) = strategy.tendTrigger();
+        assertTrue(trigger);
+
+        uint256 crvBefore = IERC20(tokenAddrs["CRV"]).balanceOf(address(strategy));
+
+        // Run tend to swap CVX for CRV
+        vm.prank(keeper);
+        strategy.tend();
+
+        assertGt(
+            IERC20(tokenAddrs["CRV"]).balanceOf(address(strategy)),
+            crvBefore
+        );
+
+        // Earn Interest
+        skip(1 days);
+
+        // Report profit
+        vm.prank(keeper);
+        (uint256 profit, uint256 loss) = strategy.report();
+
+        // Check return Values
+        assertGe(profit, 0, "!profit");
+        assertEq(loss, 0, "!loss");
     }
 }

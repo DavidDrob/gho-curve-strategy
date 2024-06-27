@@ -38,6 +38,7 @@ contract Strategy is BaseStrategy {
     IERC20 public constant CRV_USD = IERC20(0xf939E0A03FB07F59A73314E73794Be0E57ac1b4E);
     IERC20 public constant CRV = IERC20(0xD533a949740bb3306d119CC777fa900bA034cd52);
     IERC20 public constant CVX = IERC20(0x4e3FBD56CD56c3e72c1403e103b45Db9da5B9D2B);
+    IERC20 public constant WETH = IERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
     ICurvePool public constant POOL = ICurvePool(0x635EF0056A597D13863B73825CcA297236578595);
     IConvex public constant CONVEX = IConvex(0xF403C135812408BFbE8713b5A23a04b3D48AAE31);
     IConvexRewards public constant CONVEX_REWARDS = IConvexRewards(0x5eC758f79b96AE74e7F1Ba9583009aFB3fc8eACB);
@@ -49,7 +50,8 @@ contract Strategy is BaseStrategy {
     uint256 public constant SLIPPAGE = 9_900; // slippage in BPS
     uint256 public constant MAX_BPS = 10_000;
 
-    uint256 public constant MIN_CVX_TO_HARVEST = 30e18;
+    uint256 public constant MIN_CVX_TO_HARVEST = 30e18; // 30 CVX
+    uint256 public constant MIN_POOL_DEPOSIT = 0.1e18; // 0.10 GHO
 
     constructor(
         address _asset,
@@ -59,6 +61,8 @@ contract Strategy is BaseStrategy {
         CRV_USD.approve(address(POOL), type(uint256).max);
         POOL.approve(address(CONVEX), type(uint256).max);
         CRV.approve(address(REWARDS_POOL), type(uint256).max);
+        CVX.approve(address(CVX_ETH_POOL), type(uint256).max);
+        WETH.approve(address(REWARDS_POOL), type(uint256).max);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -295,9 +299,8 @@ contract Strategy is BaseStrategy {
      * @param _totalIdle The current amount of idle funds that are available to deploy.
      *
     */
-    // swaps CVX rewards for CRV via WETH
+    // swaps CVX rewards for CRV via WETH and deposit idle GHO to LP
     // call this before report to compound more rewards
-    // TODO: approve pools & test
     function _tend(uint256 _totalIdle) internal override {
         if (!_tendTrigger()) revert NotEnoughCVX();
 
@@ -316,6 +319,16 @@ contract Strategy is BaseStrategy {
 
         // swap WETH -> CRV
         REWARDS_POOL.exchange(1, 2, _ethAmount, _minCrv);
+
+        if (_totalIdle > MIN_POOL_DEPOSIT) {
+            uint256[] memory _amounts = new uint256[](2);
+            _amounts[0] = _totalIdle;
+
+            uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
+            uint256 _minAmountOut = Math.mulDiv(_expectedLpAmount, SLIPPAGE, MAX_BPS);
+
+            POOL.add_liquidity(_amounts, _minAmountOut);
+        }
     }
 
     /**
