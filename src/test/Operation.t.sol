@@ -46,7 +46,7 @@ contract OperationTest is Setup {
         strategy.redeem(_amount, user, user);
 
         assertEq(strategy.balanceOf(user), 0);
-        assertEq(asset.balanceOf(address(address(strategy))), 0);
+        assertEq(asset.balanceOf(address(strategy)), 0);
         assertApproxEqRel(
           asset.balanceOf(user),
           balanceBefore + _amount,

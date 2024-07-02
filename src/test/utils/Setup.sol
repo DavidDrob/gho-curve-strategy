@@ -38,7 +38,7 @@ contract Setup is ExtendedTest, IEvents {
     uint256 public decimals;
     uint256 public MAX_BPS = 10_000;
 
-    // Fuzz from $0.01 of 1e18 stable coins up to 1 trillion of a 1e18 coin
+    // Fuzz from $0.01 of 1e18 stable coins up to 1 million of a 1e18 coin
     uint256 public maxFuzzAmount = 1e24;
     uint256 public minFuzzAmount = 0.01e18;
 

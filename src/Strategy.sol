@@ -84,9 +84,8 @@ contract Strategy is BaseStrategy {
         uint256[] memory _amounts = new uint256[](2);
         _amounts[0] = _amount;
 
-        uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
-        uint256 _minAmountOut = Math.mulDiv(_expectedLpAmount, SLIPPAGE, MAX_BPS);
-
+        // Pool type is Stableswap, so LP price is almost 1:1 to assets
+        uint256 _minAmountOut = Math.mulDiv(_amount, SLIPPAGE, MAX_BPS);
         uint256 _lpAmount = POOL.add_liquidity(_amounts, _minAmountOut);
 
         // Deposit crvUSDGHO LP into convex and stake.
@@ -130,13 +129,11 @@ contract Strategy is BaseStrategy {
         if (_lp_amount == 0) revert ZeroLP();
         CONVEX_REWARDS.withdrawAndUnwrap(_lp_amount, false);
 
-        uint256 _minAmountOut = Math.mulDiv(_amount, SLIPPAGE, 10_000);
-
         // Withdraw GHO
         POOL.remove_liquidity_one_coin(
             _lp_amount,
             int128(0),
-            _minAmountOut
+            0 // vault already checks for slippage
         );
     }
 
@@ -311,10 +308,8 @@ contract Strategy is BaseStrategy {
             uint256[] memory _amounts = new uint256[](2);
             _amounts[0] = _totalIdle;
 
-            uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
-            uint256 _minAmountOut = Math.mulDiv(_expectedLpAmount, SLIPPAGE, MAX_BPS);
-
-            POOL.add_liquidity(_amounts, _minAmountOut);
+            // trusted
+            POOL.add_liquidity(_amounts, 0);
         }
     }
 
