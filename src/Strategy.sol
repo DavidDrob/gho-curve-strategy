@@ -29,7 +29,6 @@ import "./interfaces/convex/IConvexRewards.sol";
 // Custom errors
 error ZeroLP();
 error NoCRVMinted();
-error NotEnoughCVX();
 
 contract Strategy is BaseStrategy {
     using SafeERC20 for ERC20;
@@ -163,6 +162,7 @@ contract Strategy is BaseStrategy {
      * @return _totalAssets A trusted and accurate account for the total
      * amount of 'asset' the strategy currently holds including idle funds.
      */
+    // Must be called by trusted actor to avoid MEV
     function _harvestAndReport()
         internal
         override
@@ -174,19 +174,12 @@ contract Strategy is BaseStrategy {
             if (!_claimedSucessfully) revert NoCRVMinted();
             
             uint256 _dx = CRV.balanceOf(address(this));
-
-            uint256 _expected_dy = REWARDS_POOL.get_dy(2, 0, _dx);
-            uint256 min_dy = Math.mulDiv(_expected_dy, SLIPPAGE, MAX_BPS);
-
-            uint256 _amount = REWARDS_POOL.exchange(2, 0, _dx, min_dy);
+            uint256 _amount = REWARDS_POOL.exchange(2, 0, _dx, 0);
 
             uint256[] memory _amounts = new uint256[](2);
             _amounts[1] = _amount;
 
-            uint256 _expectedLpAmount = POOL.calc_token_amount(_amounts, true);
-            uint256 _minAmountOut = Math.mulDiv(_expectedLpAmount, SLIPPAGE, MAX_BPS);
-
-            uint256 _lpAmount = POOL.add_liquidity(_amounts, _minAmountOut);
+            uint256 _lpAmount = POOL.add_liquidity(_amounts, 0);
 
             // Deposit crvUSDGHO LP into convex and stake.
             CONVEX.deposit(PID, _lpAmount, true);
@@ -301,24 +294,18 @@ contract Strategy is BaseStrategy {
     */
     // swaps CVX rewards for CRV via WETH and deposit idle GHO to LP
     // call this before report to compound more rewards
+    //
+    // Must be called by trusted actor to avoid MEV
     function _tend(uint256 _totalIdle) internal override {
-        if (!_tendTrigger()) revert NotEnoughCVX();
+        if (_tendTrigger()) {
+            uint256 _cvxBalance = CVX.balanceOf(address(this));
 
-	    uint256 _cvxBalance = CVX.balanceOf(address(this));
+            // swap CVX -> WETH
+            uint256 _ethAmount = CVX_ETH_POOL.exchange(1, 0, _cvxBalance, 0);
 
-        // calculate slippage for CVX -> WETH  
-        uint256 _expectedEth = CVX_ETH_POOL.get_dy(1, 0, _cvxBalance);
-        uint256 _minEth = Math.mulDiv(_expectedEth , SLIPPAGE, MAX_BPS);
-
-        // swap CVX -> WETH
-        uint256 _ethAmount = CVX_ETH_POOL.exchange(1, 0, _cvxBalance, _minEth);
-
-        // calculate slippage for WETH -> CRV
-        uint256 _expectedCrv = REWARDS_POOL.get_dy(1, 2, _ethAmount);
-        uint256 _minCrv = Math.mulDiv(_expectedCrv , SLIPPAGE, MAX_BPS);
-
-        // swap WETH -> CRV
-        REWARDS_POOL.exchange(1, 2, _ethAmount, _minCrv);
+            // swap WETH -> CRV
+            REWARDS_POOL.exchange(1, 2, _ethAmount, 0);
+        }
 
         if (_totalIdle > MIN_POOL_DEPOSIT) {
             uint256[] memory _amounts = new uint256[](2);
