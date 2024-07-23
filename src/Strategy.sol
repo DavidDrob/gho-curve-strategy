@@ -29,6 +29,7 @@ import "./interfaces/convex/IConvexRewards.sol";
 // Custom errors
 error ZeroLP();
 error NoCRVMinted();
+error InvalidSlippage();
 
 contract Strategy is BaseStrategy {
     using SafeERC20 for ERC20;
@@ -46,11 +47,11 @@ contract Strategy is BaseStrategy {
 
     uint256 public constant PID = 335; // convex pool id
 
-    uint256 public constant SLIPPAGE = 9_900; // slippage in BPS
-    uint256 public constant MAX_BPS = 10_000;
-
     uint256 public constant MIN_CVX_TO_HARVEST = 30e18; // 30 CVX
     uint256 public constant MIN_POOL_DEPOSIT = 0.1e18; // 0.10 GHO
+
+    uint256 public constant MAX_BPS = 10_000;
+    uint256 public slippage = 9_900; // slippage in BPS
 
     constructor(
         address _asset,
@@ -62,6 +63,13 @@ contract Strategy is BaseStrategy {
         CRV.approve(address(REWARDS_POOL), type(uint256).max);
         CVX.approve(address(CVX_ETH_POOL), type(uint256).max);
         WETH.approve(address(REWARDS_POOL), type(uint256).max);
+    }
+
+
+    function updateSlippage(uint256 _slippage) external onlyManagement {
+        if (_slippage > 10_000) revert InvalidSlippage();
+
+        slippage = _slippage;
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -85,7 +93,7 @@ contract Strategy is BaseStrategy {
         _amounts[0] = _amount;
 
         // Pool type is Stableswap, so LP price is almost 1:1 to assets
-        uint256 _minAmountOut = Math.mulDiv(_amount, SLIPPAGE, MAX_BPS);
+        uint256 _minAmountOut = Math.mulDiv(_amount, slippage, MAX_BPS);
         uint256 _lpAmount = POOL.add_liquidity(_amounts, _minAmountOut);
 
         // Deposit crvUSDGHO LP into convex and stake.
